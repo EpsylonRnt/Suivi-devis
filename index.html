@@ -136,6 +136,7 @@ label{display:flex;flex-direction:column;gap:4px;font-size:12.5px;font-weight:60
 label .field{font-weight:400;font-size:14px;color:var(--ink)}
 textarea.field{resize:vertical;min-height:72px}
 .req{color:var(--lost)}
+.per{font-style:normal;font-weight:600;color:var(--daniel-bleu)}
 .hint{font-style:normal;font-weight:400;color:var(--muted)}
 #fPeriode.on{border-color:var(--daniel-bleu);background:#eef6f8;font-weight:600;color:var(--daniel-petrole)}
 .form-err{background:var(--lost-bg);color:var(--lost);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:13px;font-weight:600}
@@ -341,6 +342,7 @@ textarea.field{resize:vertical;min-height:72px}
         </label>
         <label id="lblRelance"><span>Prochaine relance</span><input class="field" name="relance" type="date"></label>
         <label id="lblValid" hidden><span>Date de validation</span><input class="field" name="dateValidation" type="date"></label>
+        <label id="lblPerte" hidden><span>Date de perte</span><input class="field" name="datePerte" type="date"></label>
         <label id="lblLivr" hidden><span>Date de livraison <em class="hint">— le CA est compté ce mois-là</em></span><input class="field" name="dateLivraison" type="date"></label>
         <label class="full"><span>Notes</span><textarea class="field" name="notes" placeholder="Interlocuteur, concurrent, motif de perte…"></textarea></label>
       </div>
@@ -385,6 +387,7 @@ var STATUTS = {
   perdu:{label:"Perdu"}
 };
 var ORDER = ["relancer","nrp","valide","perdu"];
+var ACTIFS = {relancer:1, nrp:1};
 
 /* ---------- Utilitaires ---------- */
 function $(s){ return document.querySelector(s); }
@@ -488,6 +491,14 @@ function donneesMensuelles(annee){
 }
 
 function dateCA(x){ return x.dateLivraison || dateValid(x); }
+function datePerte(x){
+  if(x.datePerte) return x.datePerte;
+  var h = x.historique || [];
+  for(var i=h.length-1; i>=0; i--){
+    if(/Perdu$/.test(h[i].t || "")){ var d = new Date(h[i].d); if(!isNaN(d)) return isoD(d); }
+  }
+  return x.date;
+}
 // Date de validation : champ dédié, sinon retrouvée dans l'historique, sinon date du devis
 function dateValid(x){
   if(x.dateValidation) return x.dateValidation;
@@ -585,15 +596,38 @@ $("#fAnnee").addEventListener("change", function(e){ anneeStats = +e.target.valu
   chart.addEventListener("mouseleave", function(){ tip.hidden = true; });
 })();
 
-function dansPeriode(x){ return !filtre.periode || String(x.date||"").slice(0,7)===filtre.periode; }
+// Période : "" = tout, "2026" = cumul annuel, "2026-11" = un mois.
+// Seuls les résultats (validé / perdu) sont filtrés, à la date du résultat ; les devis en cours restent tous visibles.
+function dateResultat(x){
+  if(x.statut==="valide") return dateCA(x);
+  if(x.statut==="perdu") return datePerte(x);
+  return null;
+}
+function dansPeriode(x){
+  if(!filtre.periode || actif(x)) return true;
+  return String(dateResultat(x)||"").indexOf(filtre.periode)===0;
+}
+function libPeriode(p){
+  if(!p) return "";
+  if(p.length===4) return "cumul "+p;
+  var m = MOIS_LONG[+p.slice(5,7)-1].toLowerCase();
+  return m+" "+p.slice(0,4);
+}
 function renderPeriodes(){
-  var s = {}; s[isoD(today()).slice(0,7)] = 1;
-  devis.forEach(function(x){ var m = String(x.date||"").slice(0,7); if(/^\d{4}-\d{2}$/.test(m)) s[m] = 1; });
-  var L = Object.keys(s).sort().reverse();
-  if(filtre.periode && L.indexOf(filtre.periode)<0) filtre.periode = "";
-  $("#fPeriode").innerHTML = '<option value="">Tous les mois</option>' + L.map(function(m){
-    var p = m.split("-"); return '<option value="'+m+'" '+(m===filtre.periode?"selected":"")+'>'+(/^[aeiou]/i.test(MOIS_LONG[+p[1]-1]) ? "Devis d’" : "Devis de ")+MOIS_LONG[+p[1]-1].toLowerCase()+" "+p[0]+'</option>';
-  }).join("");
+  var mois = {}, ans = {}, cur = isoD(today()).slice(0,7);
+  mois[cur] = 1; ans[cur.slice(0,4)] = 1;
+  devis.forEach(function(x){
+    [x.date, dateResultat(x)].forEach(function(s){
+      var m = String(s||"").slice(0,7);
+      if(/^\d{4}-\d{2}$/.test(m)){ mois[m] = 1; ans[m.slice(0,4)] = 1; }
+    });
+  });
+  var LA = Object.keys(ans).sort().reverse(), LM = Object.keys(mois).sort().reverse();
+  if(filtre.periode && LA.indexOf(filtre.periode)<0 && LM.indexOf(filtre.periode)<0) filtre.periode = "";
+  function opt(v, t){ return '<option value="'+v+'" '+(v===filtre.periode?"selected":"")+'>'+t+'</option>'; }
+  $("#fPeriode").innerHTML = opt("", "Résultats : toute période") +
+    '<optgroup label="Cumul annuel">' + LA.map(function(a){ return opt(a, "Cumul "+a); }).join("") + '</optgroup>' +
+    '<optgroup label="Mois">' + LM.map(function(m){ var l = libPeriode(m); return opt(m, l.charAt(0).toUpperCase()+l.slice(1)); }).join("") + '</optgroup>';
   $("#fPeriode").classList.toggle("on", !!filtre.periode);
 }
 function renderStats(){
@@ -606,7 +640,7 @@ function renderStats(){
     var L = base.filter(function(x){ return x.statut===k; });
     var tot = L.reduce(function(a,x){ return a+(+x.montant||0); },0);
     h += '<button type="button" class="tile t-'+k+' '+(filtre.statut===k?"on":"")+'" data-statut="'+k+'">'+
-      '<span class="tile-lbl"><i class="dot"></i>'+STATUTS[k].label+'</span><b>'+L.length+'</b><small>'+(tot?eur(tot)+" HT":"&nbsp;")+'</small></button>';
+      '<span class="tile-lbl"><i class="dot"></i>'+STATUTS[k].label+((filtre.periode && !ACTIFS[k]) ? ' <em class="per">· '+libPeriode(filtre.periode)+'</em>' : '')+'</span><b>'+L.length+'</b><small>'+(tot?eur(tot)+" HT":"&nbsp;")+'</small></button>';
   });
   $("#stats").innerHTML = h;
 }
@@ -656,6 +690,7 @@ function relanceCell(x){
     var dl = x.dateLivraison;
     return dl ? '<span class="sub">Livraison</span><div>'+fmtD(dl)+'</div>' : '<span class="sub">Validé le '+fmtD(dateValid(x))+'</span>';
   }
+  if(x.statut==="perdu") return '<span class="sub">Perdu le '+fmtD(datePerte(x))+'</span>';
   if(!actif(x)) return '<span class="sub">—</span>';
   var n = (x.nbRelances||0);
   var r = parseD(x.relance);
@@ -708,6 +743,7 @@ function setStatut(id, statut){
   var x = find(id); if(!x || x.statut===statut) return;
   x.statut = statut;
   if(statut==="valide") x.dateValidation = isoD(today()); else { delete x.dateValidation; delete x.dateLivraison; }
+  if(statut==="perdu") x.datePerte = isoD(today()); else delete x.datePerte;
   if(actif(x) && !x.relance) x.relance = addDays(isoD(today()), DELAI_RELANCE_JOURS);
   x.maj = new Date().toISOString();
   log(x, "Statut → "+STATUTS[statut].label);
@@ -725,11 +761,14 @@ function relanceFaite(id){
 
 /* ---------- Formulaire ---------- */
 var dlg = $("#dlg"), form = $("#form"), el = form.elements;
-var CHAMPS = ["id","client","tel","date","numero","contenu","montant","commercial","statut","relance","dateValidation","dateLivraison","notes"];
+var CHAMPS = ["id","client","tel","date","numero","contenu","montant","commercial","statut","relance","dateValidation","dateLivraison","datePerte","notes"];
 function majChampsStatut(){
   var v = el.statut.value==="valide";
   $("#lblValid").hidden = !v;
   $("#lblLivr").hidden = !v;
+  var p = el.statut.value==="perdu";
+  $("#lblPerte").hidden = !p;
+  if(p && !el.datePerte.value) el.datePerte.value = isoD(today());
   $("#lblRelance").hidden = v || el.statut.value==="perdu";
   if(v && !el.dateValidation.value) el.dateValidation.value = isoD(today());
 }
@@ -752,6 +791,7 @@ function openForm(x){
     el[k].value = v;
   });
   if(x && x.statut==="valide" && !x.dateValidation) el.dateValidation.value = dateValid(x) || "";
+  if(x && x.statut==="perdu" && !x.datePerte) el.datePerte.value = datePerte(x) || "";
   majChampsStatut();
   var h = (x && x.historique) || [];
   $("#hist").hidden = !h.length;
@@ -788,6 +828,7 @@ function enregistrer(){
   f.montant = montant;
   if(!STATUTS[f.statut]) f.statut = "relancer";
   if(f.statut==="valide"){ if(!f.dateValidation) f.dateValidation = isoD(today()); } else { f.dateValidation = ""; f.dateLivraison = ""; }
+  if(f.statut==="perdu"){ if(!f.datePerte) f.datePerte = isoD(today()); } else f.datePerte = "";
 
   var now = new Date().toISOString();
   if(f.id){
@@ -868,12 +909,12 @@ function stamp(){ return isoD(today()); }
 
 $("#btnCsv").addEventListener("click", function(){
   if(!devis.length) return toast("Aucun devis à exporter.");
-  var cols = [["Date devis","date"],["N° devis","numero"],["Client","client"],["Téléphone","tel"],["Contenu","contenu"],["Montant HT","montant"],["Commercial","commercial"],["Statut","statut"],["Prochaine relance","relance"],["Date de validation","dateValidation"],["Date de livraison","dateLivraison"],["Nb relances","nbRelances"],["Notes","notes"]];
+  var cols = [["Date devis","date"],["N° devis","numero"],["Client","client"],["Téléphone","tel"],["Contenu","contenu"],["Montant HT","montant"],["Commercial","commercial"],["Statut","statut"],["Prochaine relance","relance"],["Date de validation","dateValidation"],["Date de livraison","dateLivraison"],["Date de perte","datePerte"],["Nb relances","nbRelances"],["Notes","notes"]];
   function cell(v){ return '"' + String(v == null ? "" : v).replace(/"/g,'""') + '"'; }
   var rows = filtered().map(function(x){ return cols.map(function(c){
     var k = c[1], v = x[k];
     if(k==="statut") v = STATUTS[v] ? STATUTS[v].label : v;
-    if(k==="date"||k==="relance"||k==="dateValidation"||k==="dateLivraison") v = v ? fmtD(v) : "";
+    if(k==="date"||k==="relance"||k==="dateValidation"||k==="dateLivraison"||k==="datePerte") v = v ? fmtD(v) : "";
     if(k==="montant" && v!=="" && v!=null) v = String(v).replace(".",",");
     return cell(v);
   }).join(";"); });
