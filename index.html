@@ -136,6 +136,8 @@ label{display:flex;flex-direction:column;gap:4px;font-size:12.5px;font-weight:60
 label .field{font-weight:400;font-size:14px;color:var(--ink)}
 textarea.field{resize:vertical;min-height:72px}
 .req{color:var(--lost)}
+.hint{font-style:normal;font-weight:400;color:var(--muted)}
+#fPeriode.on{border-color:var(--daniel-bleu);background:#eef6f8;font-weight:600;color:var(--daniel-petrole)}
 .form-err{background:var(--lost-bg);color:var(--lost);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:13px;font-weight:600}
 .hist{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}
 .hist h3{font-family:var(--title);font-size:12px;margin:0 0 8px;color:var(--daniel-bleu);text-transform:uppercase;letter-spacing:.08em}
@@ -209,6 +211,7 @@ textarea.field{resize:vertical;min-height:72px}
   td.c-contenu::before{display:block;margin-bottom:2px}
   td.acts{justify-content:flex-end;padding-top:8px}
   td.acts::before{content:none}
+  td .v{display:block;text-align:right}
   .grid{grid-template-columns:1fr}
   #viewStats .card{background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);overflow-x:auto}
   .mtable{display:table;width:100%}
@@ -275,7 +278,7 @@ textarea.field{resize:vertical;min-height:72px}
         <tfoot id="mFoot"></tfoot>
       </table>
     </div>
-    <p class="note">Les ventes sont comptées au mois de leur validation, les devis en attente au mois de leur émission. Les affaires perdues ne sont pas comptées.</p>
+    <p class="note">Les ventes sont comptées au mois de leur livraison (ou de leur validation si aucune date de livraison n'est saisie), les devis en attente au mois de leur émission. Les affaires perdues ne sont pas comptées.</p>
   </div>
 
   <div id="viewDevis">
@@ -283,6 +286,7 @@ textarea.field{resize:vertical;min-height:72px}
 
   <div class="toolbar">
     <input type="search" class="field" id="q" placeholder="Rechercher un client, un contenu, un n° de devis, un téléphone…">
+    <select class="field" id="fPeriode" aria-label="Filtrer par mois du devis"></select>
     <select class="field" id="fTri" aria-label="Trier">
       <option value="relance-asc">Prochaines relances d'abord</option>
       <option value="date-desc">Devis les plus récents</option>
@@ -337,6 +341,7 @@ textarea.field{resize:vertical;min-height:72px}
         </label>
         <label id="lblRelance"><span>Prochaine relance</span><input class="field" name="relance" type="date"></label>
         <label id="lblValid" hidden><span>Date de validation</span><input class="field" name="dateValidation" type="date"></label>
+        <label id="lblLivr" hidden><span>Date de livraison <em class="hint">— le CA est compté ce mois-là</em></span><input class="field" name="dateLivraison" type="date"></label>
         <label class="full"><span>Notes</span><textarea class="field" name="notes" placeholder="Interlocuteur, concurrent, motif de perte…"></textarea></label>
       </div>
       <datalist id="dlCommerciaux"></datalist>
@@ -431,7 +436,7 @@ $("#confirmNo").addEventListener("click", function(){ confirmCb = null; dlgC.clo
 
 /* ---------- État ---------- */
 var devis = load();
-var filtre = {statut:null, retard:false, q:"", commercial:"", tri:"relance-asc"};
+var filtre = {statut:null, retard:false, q:"", commercial:"", periode:"", tri:"relance-asc"};
 if(!storageOK) $("#storageWarn").hidden = false;
 
 /* ---------- Rendu ---------- */
@@ -472,8 +477,8 @@ function donneesMensuelles(annee){
   var mois = [];
   for(var i=0;i<12;i++) mois.push({vN:0,vM:0,aN:0,aM:0});
   devis.forEach(function(x){
-    // Vendu : mois de validation ; en attente : mois d'émission du devis
-    var d = parseD(x.statut==="valide" ? dateValid(x) : x.date);
+    // Vendu : mois de livraison (sinon de validation) ; en attente : mois d'émission du devis
+    var d = parseD(x.statut==="valide" ? dateCA(x) : x.date);
     if(!d || d.getFullYear()!==annee) return;
     var m = mois[d.getMonth()], mt = +x.montant || 0;
     if(x.statut==="valide"){ m.vN++; m.vM += mt; }
@@ -482,6 +487,7 @@ function donneesMensuelles(annee){
   return mois;
 }
 
+function dateCA(x){ return x.dateLivraison || dateValid(x); }
 // Date de validation : champ dédié, sinon retrouvée dans l'historique, sinon date du devis
 function dateValid(x){
   if(x.dateValidation) return x.dateValidation;
@@ -495,7 +501,7 @@ function dateValid(x){
 function renderMensuel(){
   // Années disponibles
   var ans = {}; ans[today().getFullYear()] = 1;
-  devis.forEach(function(x){ [x.date, x.statut==="valide" ? dateValid(x) : null].forEach(function(s){ var d = parseD(s); if(d) ans[d.getFullYear()] = 1; }); });
+  devis.forEach(function(x){ [x.date, x.statut==="valide" ? dateCA(x) : null].forEach(function(s){ var d = parseD(s); if(d) ans[d.getFullYear()] = 1; }); });
   var liste = Object.keys(ans).map(Number).sort(function(a,b){ return b-a; });
   if(liste.indexOf(anneeStats)<0) anneeStats = liste[0];
   $("#fAnnee").innerHTML = liste.map(function(a){ return '<option '+(a===anneeStats?"selected":"")+'>'+a+'</option>'; }).join("");
@@ -579,12 +585,25 @@ $("#fAnnee").addEventListener("change", function(e){ anneeStats = +e.target.valu
   chart.addEventListener("mouseleave", function(){ tip.hidden = true; });
 })();
 
+function dansPeriode(x){ return !filtre.periode || String(x.date||"").slice(0,7)===filtre.periode; }
+function renderPeriodes(){
+  var s = {}; s[isoD(today()).slice(0,7)] = 1;
+  devis.forEach(function(x){ var m = String(x.date||"").slice(0,7); if(/^\d{4}-\d{2}$/.test(m)) s[m] = 1; });
+  var L = Object.keys(s).sort().reverse();
+  if(filtre.periode && L.indexOf(filtre.periode)<0) filtre.periode = "";
+  $("#fPeriode").innerHTML = '<option value="">Tous les mois</option>' + L.map(function(m){
+    var p = m.split("-"); return '<option value="'+m+'" '+(m===filtre.periode?"selected":"")+'>'+(/^[aeiou]/i.test(MOIS_LONG[+p[1]-1]) ? "Devis d’" : "Devis de ")+MOIS_LONG[+p[1]-1].toLowerCase()+" "+p[0]+'</option>';
+  }).join("");
+  $("#fPeriode").classList.toggle("on", !!filtre.periode);
+}
 function renderStats(){
-  var nbDue = devis.filter(relanceDue).length;
+  renderPeriodes();
+  var base = devis.filter(dansPeriode);
+  var nbDue = base.filter(relanceDue).length;
   var h = '<button type="button" class="tile t-due '+(filtre.retard?"on":"")+'" data-retard="1">'+
     '<span class="tile-lbl">⏰ Relances à faire</span><b>'+nbDue+'</b><small>échéance atteinte ou dépassée</small></button>';
   ORDER.forEach(function(k){
-    var L = devis.filter(function(x){ return x.statut===k; });
+    var L = base.filter(function(x){ return x.statut===k; });
     var tot = L.reduce(function(a,x){ return a+(+x.montant||0); },0);
     h += '<button type="button" class="tile t-'+k+' '+(filtre.statut===k?"on":"")+'" data-statut="'+k+'">'+
       '<span class="tile-lbl"><i class="dot"></i>'+STATUTS[k].label+'</span><b>'+L.length+'</b><small>'+(tot?eur(tot)+" HT":"&nbsp;")+'</small></button>';
@@ -607,6 +626,7 @@ function filtered(){
   var q = norm(filtre.q.trim());
   var qDigits = filtre.q.replace(/\D/g,"");
   var L = devis.filter(function(x){
+    if(!dansPeriode(x)) return false;
     if(filtre.statut && x.statut!==filtre.statut) return false;
     if(filtre.retard && !relanceDue(x)) return false;
     if(filtre.commercial && (x.commercial||"").trim()!==filtre.commercial) return false;
@@ -632,6 +652,10 @@ function filtered(){
 }
 
 function relanceCell(x){
+  if(x.statut==="valide"){
+    var dl = x.dateLivraison;
+    return dl ? '<span class="sub">Livraison</span><div>'+fmtD(dl)+'</div>' : '<span class="sub">Validé le '+fmtD(dateValid(x))+'</span>';
+  }
   if(!actif(x)) return '<span class="sub">—</span>';
   var n = (x.nbRelances||0);
   var r = parseD(x.relance);
@@ -650,19 +674,19 @@ function renderListe(){
     var opts = ORDER.map(function(k){ return '<option value="'+k+'" '+(x.statut===k?"selected":"")+'>'+STATUTS[k].label+'</option>'; }).join("");
     var telHref = String(x.tel||"").replace(/[^\d+]/g,"");
     return '<tr class="row r-'+x.statut+'" data-id="'+esc(x.id)+'">'+
-      '<td data-label="Date">'+fmtD(x.date)+'<div class="sub">'+age(x.date)+'</div></td>'+
-      '<td data-label="Client"><b>'+esc(x.client)+'</b>'+(x.numero?'<div class="sub">N° '+esc(x.numero)+'</div>':"")+'</td>'+
+      '<td data-label="Date"><span class="v">'+fmtD(x.date)+'<div class="sub">'+age(x.date)+'</div></span></td>'+
+      '<td data-label="Client"><span class="v"><b>'+esc(x.client)+'</b>'+(x.numero?'<div class="sub">N° '+esc(x.numero)+'</div>':"")+'</span></td>'+
       '<td data-label="Contenu" class="c-contenu">'+esc(x.contenu)+'</td>'+
       '<td data-label="Téléphone" class="keep">'+(x.tel?'<a href="tel:'+esc(telHref)+'">'+esc(x.tel)+'</a>':"—")+'</td>'+
       '<td data-label="Montant HT" class="num">'+eur(x.montant)+'</td>'+
       '<td data-label="Commercial">'+(x.commercial?esc(x.commercial):"—")+'</td>'+
-      '<td data-label="Relance">'+relanceCell(x)+'</td>'+
+      '<td data-label="Relance"><span class="v">'+relanceCell(x)+'</span></td>'+
       '<td data-label="Statut" class="keep"><select class="statut-sel s-'+x.statut+'" data-act="statut" aria-label="Statut">'+opts+'</select></td>'+
       '<td class="acts keep">'+(actif(x)?'<button type="button" class="go" data-act="relance" title="Noter une relance et reprogrammer la suivante">✓ Relancé</button>':"")+'<button type="button" data-act="edit">Modifier</button></td>'+
     '</tr>';
   }).join("");
 
-  var filtresActifs = filtre.statut || filtre.retard || filtre.q || filtre.commercial;
+  var filtresActifs = filtre.statut || filtre.retard || filtre.q || filtre.commercial || filtre.periode;
   if(!devis.length){
     empty.innerHTML = '<b>Aucun devis pour l\'instant</b>Cliquez sur « + Nouveau devis » pour commencer le suivi.';
     empty.hidden = false;
@@ -683,7 +707,7 @@ function find(id){ for(var i=0;i<devis.length;i++) if(devis[i].id===id) return d
 function setStatut(id, statut){
   var x = find(id); if(!x || x.statut===statut) return;
   x.statut = statut;
-  if(statut==="valide") x.dateValidation = isoD(today()); else delete x.dateValidation;
+  if(statut==="valide") x.dateValidation = isoD(today()); else { delete x.dateValidation; delete x.dateLivraison; }
   if(actif(x) && !x.relance) x.relance = addDays(isoD(today()), DELAI_RELANCE_JOURS);
   x.maj = new Date().toISOString();
   log(x, "Statut → "+STATUTS[statut].label);
@@ -701,10 +725,11 @@ function relanceFaite(id){
 
 /* ---------- Formulaire ---------- */
 var dlg = $("#dlg"), form = $("#form"), el = form.elements;
-var CHAMPS = ["id","client","tel","date","numero","contenu","montant","commercial","statut","relance","dateValidation","notes"];
+var CHAMPS = ["id","client","tel","date","numero","contenu","montant","commercial","statut","relance","dateValidation","dateLivraison","notes"];
 function majChampsStatut(){
   var v = el.statut.value==="valide";
   $("#lblValid").hidden = !v;
+  $("#lblLivr").hidden = !v;
   $("#lblRelance").hidden = v || el.statut.value==="perdu";
   if(v && !el.dateValidation.value) el.dateValidation.value = isoD(today());
 }
@@ -762,7 +787,7 @@ function enregistrer(){
   }
   f.montant = montant;
   if(!STATUTS[f.statut]) f.statut = "relancer";
-  if(f.statut==="valide"){ if(!f.dateValidation) f.dateValidation = isoD(today()); } else f.dateValidation = "";
+  if(f.statut==="valide"){ if(!f.dateValidation) f.dateValidation = isoD(today()); } else { f.dateValidation = ""; f.dateLivraison = ""; }
 
   var now = new Date().toISOString();
   if(f.id){
@@ -822,13 +847,14 @@ $("#liste").addEventListener("click", function(e){
 
 document.addEventListener("click", function(e){
   if(e.target.closest("[data-reset]")){
-    filtre.statut = null; filtre.retard = false; filtre.q = ""; filtre.commercial = "";
+    filtre.statut = null; filtre.retard = false; filtre.q = ""; filtre.commercial = ""; filtre.periode = "";
     $("#q").value = ""; render();
   }
 });
 
 $("#q").addEventListener("input", function(e){ filtre.q = e.target.value; renderListe(); });
 $("#fTri").addEventListener("change", function(e){ filtre.tri = e.target.value; renderListe(); });
+$("#fPeriode").addEventListener("change", function(e){ filtre.periode = e.target.value; render(); });
 
 /* ---------- Export / sauvegarde / import ---------- */
 function download(name, content, type){
@@ -842,12 +868,12 @@ function stamp(){ return isoD(today()); }
 
 $("#btnCsv").addEventListener("click", function(){
   if(!devis.length) return toast("Aucun devis à exporter.");
-  var cols = [["Date devis","date"],["N° devis","numero"],["Client","client"],["Téléphone","tel"],["Contenu","contenu"],["Montant HT","montant"],["Commercial","commercial"],["Statut","statut"],["Prochaine relance","relance"],["Nb relances","nbRelances"],["Notes","notes"]];
+  var cols = [["Date devis","date"],["N° devis","numero"],["Client","client"],["Téléphone","tel"],["Contenu","contenu"],["Montant HT","montant"],["Commercial","commercial"],["Statut","statut"],["Prochaine relance","relance"],["Date de validation","dateValidation"],["Date de livraison","dateLivraison"],["Nb relances","nbRelances"],["Notes","notes"]];
   function cell(v){ return '"' + String(v == null ? "" : v).replace(/"/g,'""') + '"'; }
   var rows = filtered().map(function(x){ return cols.map(function(c){
     var k = c[1], v = x[k];
     if(k==="statut") v = STATUTS[v] ? STATUTS[v].label : v;
-    if(k==="date"||k==="relance") v = v ? fmtD(v) : "";
+    if(k==="date"||k==="relance"||k==="dateValidation"||k==="dateLivraison") v = v ? fmtD(v) : "";
     if(k==="montant" && v!=="" && v!=null) v = String(v).replace(".",",");
     return cell(v);
   }).join(";"); });
